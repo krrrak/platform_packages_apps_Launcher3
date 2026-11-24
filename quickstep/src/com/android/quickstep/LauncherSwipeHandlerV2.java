@@ -71,6 +71,58 @@ import java.util.function.Function;
 public class LauncherSwipeHandlerV2 extends AbsSwipeUpHandler<
         QuickstepLauncher, RecentsView<QuickstepLauncher, LauncherState>, LauncherState> {
 
+    private MomentCompactSwipeController mMomentCompactSwipe;
+    private final boolean mMomentContinuingGesture;
+
+    @Override
+    public void onMomentCompactMotion(android.view.MotionEvent event, float downX, float downY,
+            boolean rejected) {
+        if (mMomentCompactSwipe == null) {
+            mMomentCompactSwipe = new MomentCompactSwipeController(mContext);
+        }
+        final android.app.TaskInfo task = mGestureState.getRunningTask() == null ? null
+                : mGestureState.getRunningTask().getLegacyBaseTask();
+        mMomentCompactSwipe.onMotion(event, downX, downY,
+                rejected || mMomentContinuingGesture || mIsSwipeForSplit || mHandOffAnimationToHome,
+                task, mContainer);
+    }
+
+    @Override
+    protected boolean shouldEnterMomentCompact() {
+        return mMomentCompactSwipe != null && mMomentCompactSwipe.isCandidate();
+    }
+
+    @Override
+    protected void applyScrollAndTransform() {
+        super.applyScrollAndTransform();
+        if (mMomentCompactSwipe != null && mRemoteTargetHandles != null
+                && mRemoteTargetHandles.length == 1) {
+            mMomentCompactSwipe.updateTaskBounds(
+                    mRemoteTargetHandles[0].getTaskViewSimulator().getCurrentRect());
+        }
+    }
+
+    @Override
+    public void onConsumerAboutToBeSwitched() {
+        if (mMomentCompactSwipe != null && !mMomentCompactSwipe.isCommitted()) {
+            mMomentCompactSwipe.cancel();
+        }
+        super.onConsumerAboutToBeSwitched();
+    }
+
+    @Override
+    public void onGestureCancelled() {
+        if (mMomentCompactSwipe != null) mMomentCompactSwipe.cancel();
+        super.onGestureCancelled();
+    }
+
+    @Override
+    public void onRecentsAnimationCanceled(java.util.HashMap<Integer,
+            com.android.systemui.shared.recents.model.ThumbnailData> thumbnails) {
+        if (mMomentCompactSwipe != null) mMomentCompactSwipe.cancel();
+        super.onRecentsAnimationCanceled(thumbnails);
+    }
+
     public LauncherSwipeHandlerV2(Context context,
             TaskAnimationManager taskAnimationManager,
             RecentsAnimationDeviceState deviceState,
@@ -89,6 +141,7 @@ public class LauncherSwipeHandlerV2 extends AbsSwipeUpHandler<
                 inputConsumer,
                 msdlPlayerWrapper,
                 displayId);
+        mMomentContinuingGesture = continuingLastGesture;
     }
 
 
@@ -116,6 +169,26 @@ public class LauncherSwipeHandlerV2 extends AbsSwipeUpHandler<
             };
         }
 
+        if (shouldEnterMomentCompact() && !appCanEnterPip && !mIsSwipeForSplit
+                && !mHandOffAnimationToHome
+                && mMomentCompactSwipe.commit(runningTaskTarget, mContainer)) {
+            final RectF target = mMomentCompactSwipe.getTarget();
+            mContainer.getRootView().setForceHideBackArrow(true);
+            return new LauncherHomeAnimationFactory() {
+                @Override public RectF getWindowTargetRect() { return target; }
+                @Override protected float getWindowAlpha(float progress) { return 1f; }
+                @Override public void update(RectF currentRect, float progress, float radius,
+                        int overlayAlpha) {
+                    super.update(currentRect, progress, radius, overlayAlpha);
+                    mMomentCompactSwipe.updateCover(currentRect, progress, radius);
+                }
+                @Override public float getEndRadius(RectF crop) {
+                    return mMomentCompactSwipe.getLogicalCornerRadius();
+                }
+                @Override public void onCancel() { mMomentCompactSwipe.cancel(); }
+            };
+        }
+
         TaskView sourceTaskView = mRecentsView == null && targetTaskView == null
                 ? null
                 : targetTaskView == null
@@ -123,7 +196,7 @@ public class LauncherSwipeHandlerV2 extends AbsSwipeUpHandler<
                         : targetTaskView;
         final View workspaceView = findWorkspaceView(
                 targetTaskView == null ? launchCookies : Collections.emptyList(),
-                sourceTaskView);
+                sourceTaskView, targetTaskView == null ? runningTaskTarget : null);
         boolean canUseWorkspaceView = workspaceView != null
                 && workspaceView.isAttachedToWindow()
                 && workspaceView.getHeight() > 0
@@ -368,10 +441,20 @@ public class LauncherSwipeHandlerV2 extends AbsSwipeUpHandler<
      * associated with the running task.
      */
     @Nullable
-    private View findWorkspaceView(List<IBinder> launchCookies, TaskView sourceTaskView) {
+    private View findWorkspaceView(List<IBinder> launchCookies, TaskView sourceTaskView,
+            RemoteAnimationTarget animatingTask) {
         if (mIsSwipingPipToHome) {
             // Disable if swiping to PIP
             return null;
+        }
+        // The animation target, not a floating task's cached card, identifies the Home icon.
+        if (animatingTask != null && animatingTask.taskInfo != null) {
+            final var info = animatingTask.taskInfo;
+            final var component = info.baseActivity != null ? info.baseActivity : info.topActivity;
+            if (component == null) return null;
+            return mContainer.getFirstHomeElementForAppClose(
+                    StableViewInfo.fromLaunchCookies(launchCookies), component.getPackageName(),
+                    UserHandle.of(info.userId));
         }
         Task firstTask;
         if (sourceTaskView == null || ((firstTask = sourceTaskView.getFirstTask()) == null)
@@ -388,6 +471,21 @@ public class LauncherSwipeHandlerV2 extends AbsSwipeUpHandler<
 
     @Override
     protected void finishRecentsControllerToHome(Runnable callback) {
+        if (mMomentCompactSwipe != null && mMomentCompactSwipe.isCommitted()) {
+            final RecentsAnimationController controller = mRecentsAnimationController;
+            mMomentCompactSwipe.captureCover(controller, () -> {
+                if (mRecentsAnimationController != controller) {
+                    mMomentCompactSwipe.cancel();
+                    return;
+                }
+                if (mRecentsView != null) mRecentsView.cleanupRemoteTargets();
+                controller.finish(true, () -> {
+                    callback.run();
+                    mMomentCompactSwipe.launch();
+                }, false, new ActiveGestureLog.CompoundString("Moment Compact handoff"));
+            });
+            return;
+        }
         if (mRecentsView != null) {
             mRecentsView.cleanupRemoteTargets();
         }
