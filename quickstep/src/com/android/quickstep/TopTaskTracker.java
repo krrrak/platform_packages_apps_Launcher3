@@ -123,6 +123,15 @@ public class TopTaskTracker extends ISplitScreenListener.Stub implements TaskSta
     }
 
     @Override
+    public void onTaskStackChanged() {
+        if (!enableShellTopTaskTracking()) {
+            // Windowing-mode changes need not emit moved-to-front. Never retain a fullscreen
+            // navigation identity for a task that has since entered Moment.
+            mOrderedTaskList.clear();
+        }
+    }
+
+    @Override
     public void onTaskRemoved(int taskId) {
         if (enableShellTopTaskTracking()) {
             return;
@@ -375,6 +384,10 @@ public class TopTaskTracker extends ISplitScreenListener.Stub implements TaskSta
         }
     }
 
+    private static boolean isMomentTask(TaskInfo task) {
+        return task != null && task.configuration.windowConfiguration.isMomentWindowingMode();
+    }
+
     private static boolean isHomeTask(TaskInfo task) {
         return task != null && task.configuration.windowConfiguration
                 .getActivityType() == ACTIVITY_TYPE_HOME;
@@ -409,7 +422,18 @@ public class TopTaskTracker extends ISplitScreenListener.Stub implements TaskSta
         CachedTaskInfo(@Nullable GroupedTaskInfo visibleTasks) {
             mAllCachedTasks = null;
             mTopTask = null;
-            mVisibleTasks = visibleTasks;
+            if (visibleTasks != null && isMomentTask(
+                    visibleTasks.getBaseGroupedTask().getTaskInfo1())) {
+                final TaskInfo navigationTask = visibleTasks.getTaskInfoList().stream()
+                        .filter(task -> !isMomentTask(task))
+                        .filter(task -> task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN
+                                || TopTaskTracker.isHomeTask(task))
+                        .findFirst().orElse(null);
+                mVisibleTasks = navigationTask == null ? null
+                        : GroupedTaskInfo.forFullscreenTasks(navigationTask);
+            } else {
+                mVisibleTasks = visibleTasks;
+            }
             mActiveDeskId = INACTIVE_DESK_ID;
         }
 
@@ -418,8 +442,8 @@ public class TopTaskTracker extends ISplitScreenListener.Stub implements TaskSta
                 int displayId, int activeDeskId) {
             mDisplayId = displayId;
             mVisibleTasks = null;
-            mAllCachedTasks = allCachedTasks;
-            mTopTask = allCachedTasks.isEmpty() ? null : allCachedTasks.get(0);
+            mAllCachedTasks = allCachedTasks.stream().filter(task -> !isMomentTask(task)).toList();
+            mTopTask = mAllCachedTasks.isEmpty() ? null : mAllCachedTasks.get(0);
             mContext = context;
             mActiveDeskId = activeDeskId;
         }
