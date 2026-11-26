@@ -101,6 +101,30 @@ class TopTaskTrackerTest {
 
     @Test
     @DisableFlags(FLAG_ENABLE_SHELL_TOP_TASK_TRACKING)
+    fun momentDoesNotReplaceTheFullscreenNavigationTask() {
+        val moment = createTaskInfo(
+            1, DEFAULT_DISPLAY, android.app.WindowConfiguration.WINDOWING_MODE_MOMENT
+        )
+        val fullscreen = createTaskInfo(2, DEFAULT_DISPLAY)
+        val cached = TopTaskTracker.CachedTaskInfo(
+            listOf(moment, fullscreen), mockContext, DEFAULT_DISPLAY, INACTIVE_DESK_ID
+        )
+        assertThat(cached.taskId).isEqualTo(fullscreen.taskId)
+        assertThat(cached.mAllCachedTasks).doesNotContain(moment)
+    }
+
+    @Test
+    @EnableFlags(FLAG_ENABLE_SHELL_TOP_TASK_TRACKING)
+    fun momentAloneIsNotAFullscreenNavigationTarget() {
+        val moment = createTaskInfo(
+            1, DEFAULT_DISPLAY, android.app.WindowConfiguration.WINDOWING_MODE_MOMENT
+        )
+        val cached = TopTaskTracker.CachedTaskInfo(GroupedTaskInfo.forFullscreenTasks(moment))
+        assertThat(cached.legacyBaseTask).isNull()
+    }
+
+    @Test
+    @DisableFlags(FLAG_ENABLE_SHELL_TOP_TASK_TRACKING)
     fun getPlaceholderGroupedTaskInfo_shellTopTaskTrackingDisabled_withoutTopTask_withSplitTasks() {
         val cachedTaskInfo = TopTaskTracker.CachedTaskInfo(null)
         val result = cachedTaskInfo.getPlaceholderGroupedTaskInfo(intArrayOf(1, 2))

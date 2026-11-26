@@ -101,6 +101,7 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
     private VelocityTracker mVelocityTracker;
 
     private AbsSwipeUpHandler mInteractionHandler;
+    private boolean mMomentGestureRejected;
     private final FinishImmediatelyHandler mCleanupHandler = new FinishImmediatelyHandler();
 
     private final boolean mIsDeferredDownTarget;
@@ -199,6 +200,17 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
 
     @Override
     public void onMotionEvent(MotionEvent ev) {
+        if (ev.getActionMasked() == ACTION_DOWN) {
+            mMomentGestureRejected = false;
+        } else if (ev.getPointerCount() != 1 || ev.getActionMasked() == ACTION_CANCEL
+                || ev.getActionMasked() == ACTION_POINTER_UP) {
+            mMomentGestureRejected = true;
+        }
+        if (mInteractionHandler != null) {
+            mInteractionHandler.onMomentCompactMotion(ev, mDownPos.x, mDownPos.y,
+                    mMomentGestureRejected || mGestureState.isTrackpadGesture()
+                            || !mDeviceState.isFullyGesturalNavMode());
+        }
         if (mVelocityTracker == null) {
             return;
         }

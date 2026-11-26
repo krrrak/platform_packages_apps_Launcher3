@@ -1383,6 +1383,12 @@ public abstract class AbsSwipeUpHandler<
         return Utilities.dpiFromPx(pixels, mContext.getResources().getDisplayMetrics().densityDpi);
     }
 
+    /** Optional destination of the existing navigation gesture, not a global input monitor. */
+    public void onMomentCompactMotion(MotionEvent event, float downX, float downY,
+            boolean rejected) { }
+
+    protected boolean shouldEnterMomentCompact() { return false; }
+
     private GestureEndTarget calculateEndTarget(
             PointF velocityPxPerMs,
             float endVelocityPxPerMs,
@@ -1411,6 +1417,9 @@ public abstract class AbsSwipeUpHandler<
         if (isCancel) {
             potentialReason.append("isCancel = true");
             endTarget = LAST_TASK;
+        } else if (shouldEnterMomentCompact()) {
+            potentialReason.append("Moment Compact drop");
+            endTarget = HOME;
         } else if (isFlingY) {
             potentialReason.append("isFlingY = true -> used calculateEndTargetForFlingY -> ");
             endTarget = calculateEndTargetForFlingY(
